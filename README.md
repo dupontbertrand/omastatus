@@ -4,6 +4,8 @@ Omastatus is an independent Omarchy Quattro plugin for watching local and remote
 
 Click the dot to open a native panel with a status dot beside every service.
 
+![Omastatus monitoring websites, containers, Kubernetes, and local services](assets/dashboard-down.png)
+
 ## Features
 
 - Add, pause, categorise, recategorise, and remove services entirely from the panel.
@@ -64,8 +66,6 @@ OMASTATUS="$HOME/.config/omarchy/plugins/io.github.dupontbertrand.omastatus/bin/
 
 ## Install
 
-Once this directory is published as `https://github.com/dupontbertrand/omastatus`:
-
 ```sh
 omarchy plugin add https://github.com/dupontbertrand/omastatus --enable --yes
 ```
@@ -91,6 +91,8 @@ Both files and their parent directories are user-only. Checks run directly from 
 
 Use `+` to add a service. **Auto** is suitable for most targets; choosing a type explicitly gives stricter validation.
 
+![All enabled services operational, with a paused Kubernetes example](assets/dashboard-up.png)
+
 The dashboard offers:
 
 - category filters;
@@ -98,6 +100,14 @@ The dashboard offers:
 - immediate refresh;
 - a service manager for pause, category cycling, and two-step removal;
 - category creation/removal and polling presets.
+
+Services can be created entirely from the panel. Presets fill in common Website, Docker, Kubernetes, PostgreSQL, and systemd targets, while the Auto mode recognises supported target formats.
+
+![Adding a service from the Omastatus panel](assets/add-service.png)
+
+Categories and the polling interval are managed in the same panel.
+
+![Managing categories and polling](assets/categories.png)
 
 Right-click or middle-click the bar dot to check every service without opening the panel.
 
