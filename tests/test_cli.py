@@ -110,6 +110,8 @@ class OmastatusCliTest(unittest.TestCase):
         )
         status = self.json_cli("check")
         self.assertEqual(status["summary"]["overall"], "up")
+        self.assertEqual(status["summary"]["total"], 2)
+        self.assertEqual(status["summary"]["active"], 2)
         self.assertEqual(status["summary"]["up"], 2)
         self.assertEqual(status["services"][0]["message"], "running · healthy")
         self.assertEqual(status["services"][1]["message"], "2/2 replicas ready")
@@ -183,6 +185,8 @@ class OmastatusCliTest(unittest.TestCase):
         self.json_cli("toggle", service["id"])
         status = self.json_cli("check")
         self.assertEqual(status["summary"]["overall"], "unknown")
+        self.assertEqual(status["summary"]["total"], 1)
+        self.assertEqual(status["summary"]["active"], 0)
         self.assertEqual(status["summary"]["disabled"], 1)
         self.assertEqual(status["services"][0]["status"], "disabled")
 

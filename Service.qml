@@ -30,6 +30,7 @@ Item {
   property var results: []
   property var summary: ({
     total: 0,
+    active: 0,
     up: 0,
     down: 0,
     degraded: 0,
@@ -114,6 +115,7 @@ Item {
   function summarizeRows(rows) {
     var counts = {
       total: 0,
+      active: 0,
       up: 0,
       down: 0,
       degraded: 0,
@@ -122,18 +124,19 @@ Item {
       overall: "unknown"
     }
     for (var i = 0; i < rows.length; i++) {
+      counts.total++
       var status = String(rows[i].status || "unknown")
       if (status === "disabled") {
         counts.disabled++
       } else {
-        counts.total++
+        counts.active++
         if (counts.hasOwnProperty(status)) counts[status]++
         else counts.unknown++
       }
     }
     if (counts.down > 0) counts.overall = "down"
     else if (counts.degraded > 0) counts.overall = "degraded"
-    else if (counts.total > 0 && counts.up === counts.total) counts.overall = "up"
+    else if (counts.active > 0 && counts.up === counts.active) counts.overall = "up"
     return counts
   }
 

@@ -669,19 +669,28 @@ def load_previous_rows() -> dict[str, dict[str, Any]]:
 
 
 def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    counts = {"total": 0, "up": 0, "down": 0, "degraded": 0, "unknown": 0, "disabled": 0}
+    counts = {
+        "total": 0,
+        "active": 0,
+        "up": 0,
+        "down": 0,
+        "degraded": 0,
+        "unknown": 0,
+        "disabled": 0,
+    }
     for row in rows:
+        counts["total"] += 1
         status = row.get("status", "unknown")
         if status == "disabled":
             counts["disabled"] += 1
             continue
-        counts["total"] += 1
+        counts["active"] += 1
         counts[status if status in counts else "unknown"] += 1
     if counts["down"]:
         overall = "down"
     elif counts["degraded"]:
         overall = "degraded"
-    elif counts["total"] and counts["up"] == counts["total"]:
+    elif counts["active"] and counts["up"] == counts["active"]:
         overall = "up"
     else:
         overall = "unknown"

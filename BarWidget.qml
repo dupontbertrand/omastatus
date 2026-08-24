@@ -15,8 +15,11 @@ BarWidget {
   readonly property var summary: monitorService ? monitorService.summary : ({})
   readonly property string overall: String(summary.overall || "unknown")
   readonly property int totalCount: Number(summary.total || 0)
+  readonly property int upCount: Number(summary.up || 0)
   readonly property int downCount: Number(summary.down || 0)
   readonly property int degradedCount: Number(summary.degraded || 0)
+  readonly property int unknownCount: Number(summary.unknown || 0)
+  readonly property int disabledCount: Number(summary.disabled || 0)
   readonly property bool checking: monitorService ? monitorService.checking : false
   readonly property color healthyColor: "#59d98e"
   // Health failures stay unmistakably red across Omarchy themes. Some themes
@@ -56,11 +59,13 @@ BarWidget {
 
   function tooltip() {
     if (root.totalCount === 0) return "Omastatus — no service configured"
-    if (root.downCount > 0)
-      return "Omastatus — " + root.downCount + " down out of " + root.totalCount
-    if (root.degradedCount > 0)
-      return "Omastatus — " + root.degradedCount + " check(s) unstable"
-    return "Omastatus — all " + root.totalCount + " services are up"
+    var parts = []
+    if (root.upCount > 0) parts.push(root.upCount + " up")
+    if (root.downCount > 0) parts.push(root.downCount + " down")
+    if (root.degradedCount > 0) parts.push(root.degradedCount + " unstable")
+    if (root.unknownCount > 0) parts.push(root.unknownCount + " waiting")
+    if (root.disabledCount > 0) parts.push(root.disabledCount + " paused")
+    return "Omastatus — " + parts.join(" · ") + " (" + root.totalCount + " total)"
   }
 
   implicitWidth: button.implicitWidth

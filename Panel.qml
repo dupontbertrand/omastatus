@@ -165,12 +165,20 @@ Panel {
 
   function headline() {
     var total = Number(root.summary.total || 0)
+    var up = Number(root.summary.up || 0)
     var down = Number(root.summary.down || 0)
     var degraded = Number(root.summary.degraded || 0)
-    if (total === 0) return "No active service"
-    if (down > 0) return down + " down out of " + total
-    if (degraded > 0) return degraded + " unstable out of " + total
-    return "All " + total + " services operational"
+    var unknown = Number(root.summary.unknown || 0)
+    var disabled = Number(root.summary.disabled || 0)
+    if (total === 0) return "No service configured"
+    var parts = []
+    if (up > 0) parts.push(up + " up")
+    if (down > 0) parts.push(down + " down")
+    if (degraded > 0) parts.push(degraded + " unstable")
+    if (unknown > 0) parts.push(unknown + " waiting")
+    if (disabled > 0) parts.push(disabled + " paused")
+    parts.push(total + " total")
+    return parts.join(" · ")
   }
 
   function typeHint() {
@@ -350,7 +358,7 @@ Panel {
               anchors.verticalCenter: parent.verticalCenter
               color: root.checking ? Color.accent
                 : Number(root.summary.down || 0) > 0 ? root.urgent
-                : Number(root.summary.total || 0) > 0 ? root.healthy
+                : String(root.summary.overall || "unknown") === "up" ? root.healthy
                 : root.dim
             }
 
