@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.dupontbertrand.omastatus",
+  "name": "Omastatus",
+  "version": "0.1.0",
+  "author": "Bertrand Dupont",
+  "description": "Monitor websites, local ports, databases, hosts, and systemd units from the Omarchy bar.",
+  "license": "MIT",
+  "kinds": ["service", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omastatus",
+    "description": "Aggregated health for local and remote services",
+    "category": "Monitoring",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

@@ -1,0 +1,25 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate manifest
+        run: |
+          jq -e '.schemaVersion == 1' manifest.json
+          jq -e '(.kinds | index("service")) != null' manifest.json
+          jq -e '(.kinds | index("bar-widget")) != null' manifest.json
+          test -f "$(jq -r '.entryPoints.service' manifest.json)"
+          test -f "$(jq -r '.entryPoints.barWidget' manifest.json)"
+      - name: Compile and test
+        run: |
+          python3 -m py_compile bin/omastatus
+          python3 -m unittest discover -s tests -v
