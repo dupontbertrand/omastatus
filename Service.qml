@@ -200,11 +200,12 @@ Item {
       if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.services))
         throw new Error("invalid state object")
       var previous = root.results
-      if (announce) root.announceTransitions(previous, parsed.services)
+      // A configuration edit can land while a check using the previous
+      // snapshot is still running. Reconcile first so removed, paused, or
+      // retargeted services cannot publish a stale transition notification.
       root.results = parsed.services
-      root.summary = parsed.summary && typeof parsed.summary === "object"
-        ? parsed.summary : root.summary
-      root.resultsRevision++
+      root.reconcileResults(root.configData)
+      if (announce) root.announceTransitions(previous, root.results)
       root.checkError = ""
     } catch (error) {
       root.checkError = "The checker returned invalid data."
