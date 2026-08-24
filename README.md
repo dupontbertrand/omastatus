@@ -41,7 +41,7 @@ The add screen includes Website, Docker, Kubernetes, PostgreSQL, and systemd pre
 
 | Category | Name | Target |
 |---|---|---|
-| Production | Public website | `https://www.example.com/health` |
+| Production | Public website | `https://example.com/` |
 | Production | API readiness | `https://api.example.com/ready` |
 | Local dev | Frontend | `http://localhost:3000` |
 | Local dev | PostgreSQL | `postgres://localhost` |
@@ -55,7 +55,7 @@ The equivalent CLI commands are:
 ```sh
 OMASTATUS="$HOME/.config/omarchy/plugins/io.github.dupontbertrand.omastatus/bin/omastatus"
 
-"$OMASTATUS" add --name "Public website" --target "https://www.example.com/health"
+"$OMASTATUS" add --name "Public website" --target "https://example.com/"
 "$OMASTATUS" add --name "API container" --target "docker://my-api"
 "$OMASTATUS" add --name "API deployment" --target "k8s://production/deployment/api"
 "$OMASTATUS" add --name PostgreSQL --target "postgres://localhost"

@@ -53,7 +53,7 @@ Panel {
   property double now: Date.now()
 
   readonly property var examplePresets: [
-    { label: "WEBSITE", name: "Website", target: "https://example.com/health", type: "http" },
+    { label: "WEBSITE", name: "Website", target: "https://example.com/", type: "http" },
     { label: "DOCKER", name: "Docker container", target: "docker://my-container", type: "docker" },
     { label: "K8S", name: "Kubernetes deployment", target: "k8s://default/deployment/my-api", type: "kubernetes" },
     { label: "POSTGRES", name: "PostgreSQL", target: "postgres://localhost", type: "tcp" },
