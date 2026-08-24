@@ -19,7 +19,9 @@ BarWidget {
   readonly property int degradedCount: Number(summary.degraded || 0)
   readonly property bool checking: monitorService ? monitorService.checking : false
   readonly property color healthyColor: "#59d98e"
-  readonly property color alertColor: bar ? bar.urgent : Color.urgent
+  // Health failures stay unmistakably red across Omarchy themes. Some themes
+  // intentionally map the generic urgent colour to pink or purple.
+  readonly property color alertColor: "#ef5f6b"
   readonly property color foregroundColor: bar ? bar.barForeground : Color.foreground
   readonly property color dimColor: Qt.darker(root.foregroundColor, 1.55)
   readonly property color statusColor: {

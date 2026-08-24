@@ -29,7 +29,9 @@ Panel {
   readonly property string viewMode: String(settings.viewMode || "grouped")
   readonly property bool checking: monitorService ? monitorService.checking : false
   readonly property color foreground: bar ? bar.barForeground : Color.foreground
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
+  // Service failures must remain red even when the active theme remaps the
+  // shell's generic urgent colour to a different accent.
+  readonly property color urgent: "#ef5f6b"
   readonly property color healthy: "#59d98e"
   readonly property color dim: Qt.darker(root.foreground, 1.45)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
