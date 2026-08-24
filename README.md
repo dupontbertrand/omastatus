@@ -134,6 +134,25 @@ Omastatus uses Python 3 and standard Omarchy/Arch tools: `ping`, `systemctl`, an
 
 The checker never invokes a shell with a target. Ping hosts, systemd units, Docker container names, and Kubernetes resource references are validated and passed as separate process arguments. HTTP URLs cannot contain credentials. Like every Omarchy plugin, its QML and local executable run unsandboxed, so inspect the source before enabling it.
 
+## Uninstall safely
+
+Remove the plugin through Omarchy:
+
+```sh
+omarchy plugin remove io.github.dupontbertrand.omastatus
+```
+
+Omastatus installs no system service and makes no privileged system change. Removing the plugin stops its checks but deliberately keeps the service list and last known state, making a later reinstall non-destructive.
+
+To also erase that local data, remove the two files Omastatus creates, then remove their empty directories:
+
+```sh
+rm -f "$HOME/.config/omastatus/config.json"
+rm -f "$HOME/.local/state/omastatus/status.json"
+rmdir --ignore-fail-on-non-empty "$HOME/.config/omastatus"
+rmdir --ignore-fail-on-non-empty "$HOME/.local/state/omastatus"
+```
+
 ## Development
 
 ```sh
