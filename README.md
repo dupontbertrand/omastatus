@@ -7,7 +7,7 @@ Click the dot to open a native panel with a status dot beside every service.
 ## Features
 
 - Add, pause, categorise, recategorise, and remove services entirely from the panel.
-- Automatic target detection, plus explicit HTTP, TCP, ping, and systemd modes.
+- Automatic target detection, plus explicit HTTP, TCP, ping, systemd, Docker, and Kubernetes modes.
 - Concurrent checks, so ten timeouts do not block one after another.
 - Categories with an All/Uncategorised filter.
 - Three persistent panel layouts: grouped detail, compact list, and two-column grid.
@@ -25,8 +25,42 @@ Click the dot to open a native panel with a status dot beside every service.
 | Machine | `server.local`, `ping://192.168.1.20` | One ICMP ping |
 | System service | `nginx.service`, `systemd://docker.service` | System `systemctl is-active` |
 | User service | `systemd://user/my-worker.service` | User `systemctl --user is-active` |
+| Docker container | `docker://api`, or `api` with Docker mode selected | Container is running and not unhealthy |
+| Kubernetes pod | `k8s://default/pod/api-7c9f` | Pod phase and container readiness |
+| Kubernetes workload | `k8s://production/deployment/api`, `k8s://default/statefulset/postgres`, `k8s://monitoring/daemonset/node-exporter` | Ready replicas/nodes versus desired count |
+| Kubernetes job | `k8s://default/job/database-migration` | Completed executions versus desired completions |
+| Other Kubernetes resource | `k8s://default/service/api` | Resource existence or its Ready/Available condition when exposed |
 
 Database probes intentionally check reachability rather than authenticate. Omastatus rejects usernames and passwords in targets so credentials never land in its JSON configuration.
+
+Docker checks use the local Docker CLI. Kubernetes checks use the current `kubectl` context and store only the namespace/kind/name reference; kubeconfig credentials remain managed by Kubernetes tooling.
+
+## Example monitors
+
+The add screen includes Website, Docker, Kubernetes, PostgreSQL, and systemd presets that prefill the form without creating anything until **Add service** is pressed. A practical setup could contain:
+
+| Category | Name | Target |
+|---|---|---|
+| Production | Public website | `https://www.example.com/health` |
+| Production | API readiness | `https://api.example.com/ready` |
+| Local dev | Frontend | `http://localhost:3000` |
+| Local dev | PostgreSQL | `postgres://localhost` |
+| Containers | API container | `docker://my-api` |
+| Kubernetes | API deployment | `k8s://production/deployment/api` |
+| Kubernetes | Migration job | `k8s://production/job/migrate-2026-08` |
+| Machine | Omasync | `systemd://user/omasync.service` |
+
+The equivalent CLI commands are:
+
+```sh
+OMASTATUS="$HOME/.config/omarchy/plugins/io.github.dupontbertrand.omastatus/bin/omastatus"
+
+"$OMASTATUS" add --name "Public website" --target "https://www.example.com/health"
+"$OMASTATUS" add --name "API container" --target "docker://my-api"
+"$OMASTATUS" add --name "API deployment" --target "k8s://production/deployment/api"
+"$OMASTATUS" add --name PostgreSQL --target "postgres://localhost"
+"$OMASTATUS" add --name Omasync --target "systemd://user/omasync.service"
+```
 
 ## Install
 
@@ -86,9 +120,9 @@ Set `OMASTATUS_CONFIG_DIR` and `OMASTATUS_STATE_DIR` to override the storage pat
 
 ## Dependencies and security
 
-Omastatus uses Python 3 and standard Omarchy/Arch tools: `ping`, `systemctl`, and `omarchy-notification-send`. HTTP and TCP checks use Python's standard library.
+Omastatus uses Python 3 and standard Omarchy/Arch tools: `ping`, `systemctl`, and `omarchy-notification-send`. HTTP and TCP checks use Python's standard library. Docker and Kubernetes checks are optional and activate when their respective `docker` and `kubectl` CLIs are installed.
 
-The checker never invokes a shell with a target. Ping hosts and systemd unit names are passed as separate process arguments after validation. HTTP URLs cannot contain credentials. Like every Omarchy plugin, its QML and local executable run unsandboxed, so inspect the source before enabling it.
+The checker never invokes a shell with a target. Ping hosts, systemd units, Docker container names, and Kubernetes resource references are validated and passed as separate process arguments. HTTP URLs cannot contain credentials. Like every Omarchy plugin, its QML and local executable run unsandboxed, so inspect the source before enabling it.
 
 ## Development
 

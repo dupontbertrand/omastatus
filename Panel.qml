@@ -52,6 +52,14 @@ Panel {
   property string pendingCategoryDelete: ""
   property double now: Date.now()
 
+  readonly property var examplePresets: [
+    { label: "WEBSITE", name: "Website", target: "https://example.com/health", type: "http" },
+    { label: "DOCKER", name: "Docker container", target: "docker://my-container", type: "docker" },
+    { label: "K8S", name: "Kubernetes deployment", target: "k8s://default/deployment/my-api", type: "kubernetes" },
+    { label: "POSTGRES", name: "PostgreSQL", target: "postgres://localhost", type: "tcp" },
+    { label: "SYSTEMD", name: "Worker service", target: "systemd://user/my-worker.service", type: "systemd" }
+  ]
+
   readonly property var filteredRows: root.buildFilteredRows()
   readonly property var groupedRows: root.buildGroups()
 
@@ -170,7 +178,15 @@ Panel {
     if (root.addType === "tcp") return "localhost:5432 or redis://localhost"
     if (root.addType === "ping") return "server.local or 192.168.1.10"
     if (root.addType === "systemd") return "nginx.service or systemd://user/my-app.service"
-    return "URL, host:port, database URI, hostname, or *.service"
+    if (root.addType === "docker") return "docker://container-name"
+    if (root.addType === "kubernetes") return "k8s://namespace/kind/name"
+    return "URL, host:port, DB URI, hostname, service, Docker, or Kubernetes"
+  }
+
+  function applyExample(example) {
+    root.addName = String(example.name || "")
+    root.addTarget = String(example.target || "")
+    root.addType = String(example.type || "auto")
   }
 
   function runMutation(arguments, action) {
@@ -834,12 +850,42 @@ Panel {
 
             Text {
               width: parent.width
-              text: "Auto recognises web URLs, host:port, PostgreSQL/MySQL/Redis/MongoDB URIs, hostnames, and *.service units. Credentials are never accepted or stored."
+              text: "Auto recognises web URLs, host:port, database URIs, hostnames, *.service units, docker:// containers, and k8s:// resources. Credentials are never accepted or stored."
               textFormat: Text.PlainText
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
+            }
+
+            Text {
+              width: parent.width
+              text: "EXAMPLES — CLICK TO PREFILL"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+
+            Flow {
+              width: parent.width
+              spacing: Style.space(5)
+
+              Repeater {
+                model: root.examplePresets
+
+                Button {
+                  required property var modelData
+                  text: modelData.label
+                  foreground: root.foreground
+                  accent: Color.accent
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.space(7)
+                  verticalPadding: Style.space(3)
+                  onClicked: root.applyExample(modelData)
+                }
+              }
             }
 
             TextField {
@@ -875,11 +921,11 @@ Panel {
               spacing: Style.space(5)
 
               Repeater {
-                model: ["auto", "http", "tcp", "ping", "systemd"]
+                model: ["auto", "http", "tcp", "ping", "systemd", "docker", "kubernetes"]
 
                 Button {
                   required property string modelData
-                  text: modelData.toUpperCase()
+                  text: modelData === "kubernetes" ? "K8S" : modelData.toUpperCase()
                   bordered: root.addType === modelData
                   foreground: root.foreground
                   accent: Color.accent

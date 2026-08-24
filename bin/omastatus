@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 VERSION = 1
-SERVICE_TYPES = {"auto", "http", "tcp", "ping", "systemd"}
+SERVICE_TYPES = {"auto", "http", "tcp", "ping", "systemd", "docker", "kubernetes"}
 VIEW_MODES = {"grouped", "compact", "grid"}
 DATABASE_PORTS = {
     "postgres": 5432,
@@ -35,6 +35,8 @@ DATABASE_PORTS = {
     "mongodb": 27017,
 }
 UNIT_RE = re.compile(r"^[A-Za-z0-9_.@:-]+$")
+DOCKER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+KUBERNETES_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$")
 
 
 def config_dir() -> Path:
@@ -222,8 +224,48 @@ def parse_systemd(target: str) -> dict[str, Any]:
     return {"kind": "systemd", "scope": scope, "unit": unit}
 
 
+def parse_docker(target: str) -> dict[str, Any]:
+    raw = target.strip()
+    container = raw
+    if raw.casefold().startswith("docker://"):
+        parsed = urllib.parse.urlsplit(raw)
+        reject_credentials(parsed)
+        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+            raise ValueError("Use docker://container-name")
+        container = parsed.netloc
+    if not DOCKER_NAME_RE.fullmatch(container):
+        raise ValueError("Docker targets use docker://container-name or a container name")
+    return {"kind": "docker", "container": container}
+
+
+def parse_kubernetes(target: str) -> dict[str, Any]:
+    raw = target.strip()
+    lowered = raw.casefold()
+    if lowered.startswith(("k8s://", "kubernetes://")):
+        parsed = urllib.parse.urlsplit(raw)
+        reject_credentials(parsed)
+        if parsed.query or parsed.fragment:
+            raise ValueError("Kubernetes targets cannot contain a query or fragment")
+        parts = [parsed.netloc, *parsed.path.strip("/").split("/")]
+    else:
+        parts = raw.strip("/").split("/")
+    if len(parts) != 3 or not all(KUBERNETES_TOKEN_RE.fullmatch(part or "") for part in parts):
+        raise ValueError("Use k8s://namespace/kind/name")
+    namespace, resource_kind, name = parts
+    return {
+        "kind": "kubernetes",
+        "namespace": namespace,
+        "resourceKind": resource_kind,
+        "name": name,
+    }
+
+
 def infer_type(target: str) -> str:
     lowered = target.casefold()
+    if lowered.startswith("docker://"):
+        return "docker"
+    if lowered.startswith(("k8s://", "kubernetes://")):
+        return "kubernetes"
     if lowered.startswith(("http://", "https://")):
         return "http"
     if lowered.startswith(("tcp://", *[f"{scheme}://" for scheme in DATABASE_PORTS])):
@@ -248,6 +290,8 @@ def parse_probe(service_type: str, target: str) -> dict[str, Any]:
         "tcp": parse_tcp,
         "ping": parse_ping,
         "systemd": parse_systemd,
+        "docker": parse_docker,
+        "kubernetes": parse_kubernetes,
     }[selected]
     return parser(target)
 
@@ -436,6 +480,156 @@ def check_systemd(probe: dict[str, Any], timeout: int) -> dict[str, Any]:
     return timed_result(started, completed.returncode == 0 and state == "active", state)
 
 
+def command_detail(completed: subprocess.CompletedProcess[str], fallback: str) -> str:
+    detail = completed.stderr.strip() or completed.stdout.strip() or fallback
+    return detail.splitlines()[-1][:300]
+
+
+def check_docker(probe: dict[str, Any], timeout: int) -> dict[str, Any]:
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            ["docker", "inspect", "--format", "{{json .State}}", probe["container"]],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError:
+        return timed_result(started, False, "docker is not installed")
+    except subprocess.TimeoutExpired:
+        return timed_result(started, False, "Docker check timed out")
+    if completed.returncode != 0:
+        return timed_result(started, False, command_detail(completed, "Container not found"))
+    try:
+        state = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return timed_result(started, False, "Docker returned invalid state")
+    if not isinstance(state, dict):
+        return timed_result(started, False, "Docker returned invalid state")
+    status = str(state.get("Status") or "unknown")
+    running = state.get("Running") is True or status == "running"
+    health_data = state.get("Health") if isinstance(state.get("Health"), dict) else {}
+    health = str(health_data.get("Status") or "")
+    message = status
+    if health:
+        message += f" · {health}"
+    elif status == "exited" and state.get("ExitCode") is not None:
+        message += f" (code {state['ExitCode']})"
+    return timed_result(started, running and health != "unhealthy", message)
+
+
+def kubernetes_resource_status(resource: dict[str, Any]) -> tuple[bool, str]:
+    metadata = resource.get("metadata") if isinstance(resource.get("metadata"), dict) else {}
+    spec = resource.get("spec") if isinstance(resource.get("spec"), dict) else {}
+    status = resource.get("status") if isinstance(resource.get("status"), dict) else {}
+    kind = str(resource.get("kind") or "resource")
+    lowered_kind = kind.casefold()
+    if metadata.get("deletionTimestamp"):
+        return False, f"{kind} terminating"
+
+    if lowered_kind == "pod":
+        phase = str(status.get("phase") or "Unknown")
+        containers = status.get("containerStatuses")
+        container_rows = containers if isinstance(containers, list) else []
+        conditions = status.get("conditions")
+        pod_conditions = conditions if isinstance(conditions, list) else []
+        ready = sum(1 for row in container_rows if isinstance(row, dict) and row.get("ready") is True)
+        ready_condition = next(
+            (
+                row
+                for row in pod_conditions
+                if isinstance(row, dict) and row.get("type") == "Ready"
+            ),
+            None,
+        )
+        is_ready = (
+            ready_condition.get("status") == "True"
+            if isinstance(ready_condition, dict)
+            else (ready == len(container_rows) if container_rows else phase == "Running")
+        )
+        ok = phase == "Succeeded" or (phase == "Running" and is_ready)
+        detail = phase
+        if container_rows:
+            detail += f" · {ready}/{len(container_rows)} containers ready"
+        return ok, detail
+
+    if lowered_kind in {"deployment", "statefulset", "replicaset"}:
+        desired = int(spec.get("replicas", 1) or 0)
+        ready = int(status.get("readyReplicas", 0) or 0)
+        generation = int(metadata.get("generation", 0) or 0)
+        observed = int(status.get("observedGeneration", generation) or 0)
+        current = observed >= generation
+        prefix = "updating · " if not current else ""
+        return current and ready >= desired, f"{prefix}{ready}/{desired} replicas ready"
+
+    if lowered_kind == "daemonset":
+        desired = int(status.get("desiredNumberScheduled", 0) or 0)
+        ready = int(status.get("numberReady", 0) or 0)
+        return desired > 0 and ready >= desired, f"{ready}/{desired} nodes ready"
+
+    if lowered_kind == "job":
+        desired = int(spec.get("completions", 1) or 1)
+        succeeded = int(status.get("succeeded", 0) or 0)
+        failed = int(status.get("failed", 0) or 0)
+        detail = f"{succeeded}/{desired} completions"
+        if failed:
+            detail += f" · {failed} failed"
+        return succeeded >= desired, detail
+
+    conditions = status.get("conditions")
+    condition_rows = conditions if isinstance(conditions, list) else []
+    for condition_type in ("Available", "Ready"):
+        condition = next(
+            (
+                row
+                for row in condition_rows
+                if isinstance(row, dict) and row.get("type") == condition_type
+            ),
+            None,
+        )
+        if condition:
+            ready = condition.get("status") == "True"
+            detail = str(condition.get("reason") or condition_type)
+            return ready, detail
+    return True, f"{kind} exists"
+
+
+def check_kubernetes(probe: dict[str, Any], timeout: int) -> dict[str, Any]:
+    started = time.monotonic()
+    resource = f"{probe['resourceKind']}/{probe['name']}"
+    try:
+        completed = subprocess.run(
+            [
+                "kubectl",
+                "get",
+                resource,
+                "--namespace",
+                probe["namespace"],
+                "--output=json",
+                f"--request-timeout={timeout}s",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout + 1,
+            check=False,
+        )
+    except FileNotFoundError:
+        return timed_result(started, False, "kubectl is not installed")
+    except subprocess.TimeoutExpired:
+        return timed_result(started, False, "Kubernetes check timed out")
+    if completed.returncode != 0:
+        return timed_result(started, False, command_detail(completed, "Kubernetes resource not found"))
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return timed_result(started, False, "kubectl returned invalid JSON")
+    if not isinstance(payload, dict):
+        return timed_result(started, False, "kubectl returned invalid JSON")
+    ok, message = kubernetes_resource_status(payload)
+    return timed_result(started, ok, message)
+
+
 def check_service(service: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     row = base_result(service, config)
     checked_at = int(time.time() * 1000)
@@ -448,6 +642,8 @@ def check_service(service: dict[str, Any], config: dict[str, Any]) -> dict[str, 
             "tcp": check_tcp,
             "ping": check_ping,
             "systemd": check_systemd,
+            "docker": check_docker,
+            "kubernetes": check_kubernetes,
         }[probe["kind"]]
         probe_result = checker(probe, service["timeoutSeconds"])
     except (KeyError, OSError, TypeError, ValueError) as error:

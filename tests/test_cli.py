@@ -27,6 +27,7 @@ class OmastatusCliTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
+        self.root = root
         self.env = os.environ.copy()
         self.env["OMASTATUS_CONFIG_DIR"] = str(root / "config")
         self.env["OMASTATUS_STATE_DIR"] = str(root / "state")
@@ -52,6 +53,14 @@ class OmastatusCliTest(unittest.TestCase):
     def json_cli(self, *arguments):
         return json.loads(self.run_cli(*arguments).stdout)
 
+    def fake_command(self, name, python_body):
+        directory = self.root / "bin"
+        directory.mkdir(exist_ok=True)
+        path = directory / name
+        path.write_text(f"#!/usr/bin/env python3\n{python_body}\n", encoding="utf-8")
+        path.chmod(0o755)
+        self.env["PATH"] = f"{directory}:{self.env['PATH']}"
+
     def test_init_creates_private_default_configuration(self):
         config = self.json_cli("init")
         path = Path(self.env["OMASTATUS_CONFIG_DIR"]) / "config.json"
@@ -64,9 +73,56 @@ class OmastatusCliTest(unittest.TestCase):
         tcp = self.json_cli("add", "--name", "API", "--target", "localhost:5432")
         database = self.json_cli("add", "--name", "Redis", "--target", "redis://localhost")
         unit = self.json_cli("add", "--name", "Worker", "--target", "worker.service")
-        self.assertEqual((web["type"], tcp["type"], database["type"], unit["type"]),
-                         ("http", "tcp", "tcp", "systemd"))
+        docker = self.json_cli("add", "--name", "Container", "--target", "docker://api")
+        kubernetes = self.json_cli(
+            "add", "--name", "Deployment", "--target", "k8s://production/deployment/api"
+        )
+        self.assertEqual(
+            (
+                web["type"],
+                tcp["type"],
+                database["type"],
+                unit["type"],
+                docker["type"],
+                kubernetes["type"],
+            ),
+            ("http", "tcp", "tcp", "systemd", "docker", "kubernetes"),
+        )
         self.assertEqual((web["id"], tcp["id"]), ("api", "api-2"))
+
+    def test_docker_and_kubernetes_checks(self):
+        self.fake_command(
+            "docker",
+            "import json\nprint(json.dumps({'Status': 'running', 'Running': True, "
+            "'Health': {'Status': 'healthy'}}))",
+        )
+        self.fake_command(
+            "kubectl",
+            "import json\nprint(json.dumps({'kind': 'Deployment', "
+            "'metadata': {'generation': 3}, 'spec': {'replicas': 2}, "
+            "'status': {'observedGeneration': 3, 'readyReplicas': 2}}))",
+        )
+        self.json_cli("add", "--name", "API container", "--target", "docker://api")
+        self.json_cli(
+            "add",
+            "--name", "API deployment",
+            "--target", "k8s://production/deployment/api",
+        )
+        status = self.json_cli("check")
+        self.assertEqual(status["summary"]["overall"], "up")
+        self.assertEqual(status["summary"]["up"], 2)
+        self.assertEqual(status["services"][0]["message"], "running · healthy")
+        self.assertEqual(status["services"][1]["message"], "2/2 replicas ready")
+
+    def test_container_and_kubernetes_references_are_validated(self):
+        docker = self.run_cli(
+            "add", "--name", "Bad container", "--target", "docker://bad/name", expected=2
+        )
+        kubernetes = self.run_cli(
+            "add", "--name", "Bad resource", "--target", "k8s://default/deployment", expected=2
+        )
+        self.assertIn("docker://container-name", docker.stderr)
+        self.assertIn("k8s://namespace/kind/name", kubernetes.stderr)
 
     def test_credentials_are_rejected(self):
         result = self.run_cli(
