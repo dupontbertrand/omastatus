@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.dupontbertrand.omastatus",
   "name": "Omastatus",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "Bertrand Dupont",
   "description": "Monitor websites, ports, databases, hosts, systemd units, Docker containers, and Kubernetes resources from the Omarchy bar.",
   "license": "MIT",

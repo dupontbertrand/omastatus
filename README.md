@@ -132,7 +132,11 @@ Set `OMASTATUS_CONFIG_DIR` and `OMASTATUS_STATE_DIR` to override the storage pat
 
 Omastatus uses Python 3 and standard Omarchy/Arch tools: `ping`, `systemctl`, and `omarchy-notification-send`. HTTP and TCP checks use Python's standard library. Docker and Kubernetes checks are optional and activate when their respective `docker` and `kubectl` CLIs are installed.
 
-The checker never invokes a shell with a target. Ping hosts, systemd units, Docker container names, and Kubernetes resource references are validated and passed as separate process arguments. HTTP URLs cannot contain credentials. Like every Omarchy plugin, its QML and local executable run unsandboxed, so inspect the source before enabling it.
+The checker never invokes a shell with a target. Ping hosts, systemd units, Docker container names, and Kubernetes resource references are validated and passed as separate process arguments. HTTP URLs cannot contain credentials.
+
+Resource use is bounded before untrusted local data is decoded: JSON configuration/state files are limited to 1 MiB, with at most 128 categories and 256 services. Output captured from `ping`, `systemctl`, `docker`, or `kubectl` is limited to 256 KiB in total per check; a command is stopped on overflow or timeout before its output is parsed.
+
+Like every Omarchy plugin, its QML and local executable run unsandboxed, so inspect the source before enabling it.
 
 ## Uninstall safely
 

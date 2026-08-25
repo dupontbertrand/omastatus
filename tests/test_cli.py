@@ -213,6 +213,47 @@ class OmastatusCliTest(unittest.TestCase):
         result = self.run_cli("config", expected=2)
         self.assertIn("categories must be a JSON array", result.stderr)
 
+    def test_configuration_file_size_is_limited_before_decoding(self):
+        self.json_cli("init")
+        config_file = Path(self.env["OMASTATUS_CONFIG_DIR"]) / "config.json"
+        config_file.write_bytes(b" " * (1024 * 1024 + 1))
+        result = self.run_cli("config", expected=2)
+        self.assertIn("is limited to 1048576 bytes", result.stderr)
+
+    def test_configuration_collection_counts_are_limited(self):
+        self.json_cli("init")
+        config_file = Path(self.env["OMASTATUS_CONFIG_DIR"]) / "config.json"
+        config_file.write_text(
+            json.dumps({"categories": [{}] * 129, "services": []}),
+            encoding="utf-8",
+        )
+        categories = self.run_cli("config", expected=2)
+        self.assertIn("categories are limited to 128 entries", categories.stderr)
+
+        config_file.write_text(
+            json.dumps({"categories": [], "services": [{}] * 257}),
+            encoding="utf-8",
+        )
+        services = self.run_cli("config", expected=2)
+        self.assertIn("services are limited to 256 entries", services.stderr)
+
+    def test_kubectl_output_is_bounded_before_json_decoding(self):
+        self.fake_command(
+            "kubectl",
+            "import sys\nsys.stdout.write('x' * (300 * 1024))",
+        )
+        self.json_cli(
+            "add",
+            "--name", "Oversized deployment",
+            "--target", "k8s://default/deployment/api",
+        )
+        status = self.json_cli("check")
+        self.assertEqual(status["services"][0]["status"], "down")
+        self.assertEqual(
+            status["services"][0]["message"],
+            "kubectl output exceeded 256 KiB limit",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

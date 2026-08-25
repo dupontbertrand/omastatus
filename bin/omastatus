@@ -11,6 +11,8 @@ import json
 import math
 import os
 import re
+import selectors
+import signal
 import socket
 import subprocess
 import sys
@@ -37,6 +39,14 @@ DATABASE_PORTS = {
 UNIT_RE = re.compile(r"^[A-Za-z0-9_.@:-]+$")
 DOCKER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 KUBERNETES_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$")
+MAX_JSON_BYTES = 1024 * 1024
+MAX_CATEGORIES = 128
+MAX_SERVICES = 256
+MAX_COMMAND_OUTPUT_BYTES = 256 * 1024
+
+
+class CommandOutputLimitExceeded(RuntimeError):
+    """Raised after stopping a command whose captured output exceeds the limit."""
 
 
 def config_dir() -> Path:
@@ -92,11 +102,13 @@ def locked() -> Iterator[None]:
 
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     ensure_private_dir(path.parent)
+    encoded = (json.dumps(payload, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    if len(encoded) > MAX_JSON_BYTES:
+        raise ValueError(f"{path} is limited to {MAX_JSON_BYTES} bytes")
     descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, ensure_ascii=False)
-            handle.write("\n")
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temp_name, 0o600)
@@ -108,15 +120,84 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def read_json(path: Path) -> dict[str, Any]:
     try:
-        with path.open(encoding="utf-8") as handle:
-            value = json.load(handle)
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_JSON_BYTES + 1)
     except FileNotFoundError:
         raise
-    except (OSError, json.JSONDecodeError) as error:
+    except OSError as error:
+        raise ValueError(f"Cannot read {path}: {error}") from error
+    if len(raw) > MAX_JSON_BYTES:
+        raise ValueError(f"{path} is limited to {MAX_JSON_BYTES} bytes")
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(f"Cannot read {path}: {error}") from error
     if not isinstance(value, dict):
         raise TypeError(f"{path} must contain a JSON object")
     return value
+
+
+def stop_process(process: subprocess.Popen[bytes]) -> None:
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(process.pid, signal.SIGKILL)
+    if process.poll() is None:
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=1)
+
+
+def run_bounded(
+    command: list[str], timeout: int | float, output_limit: int = MAX_COMMAND_OUTPUT_BYTES
+) -> subprocess.CompletedProcess[str]:
+    """Run a command while bounding the combined stdout/stderr held in memory."""
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    assert process.stdout is not None
+    assert process.stderr is not None
+    streams = {process.stdout: bytearray(), process.stderr: bytearray()}
+    selector = selectors.DefaultSelector()
+    for stream in streams:
+        os.set_blocking(stream.fileno(), False)
+        selector.register(stream, selectors.EVENT_READ)
+    deadline = time.monotonic() + timeout
+    total = 0
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            events = selector.select(remaining)
+            if not events:
+                raise subprocess.TimeoutExpired(command, timeout)
+            for key, _mask in events:
+                stream = key.fileobj
+                chunk = os.read(stream.fileno(), min(65536, output_limit - total + 1))
+                if not chunk:
+                    selector.unregister(stream)
+                    continue
+                streams[stream].extend(chunk)
+                total += len(chunk)
+                if total > output_limit:
+                    raise CommandOutputLimitExceeded(
+                        f"command output exceeded {output_limit} bytes"
+                    )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(command, timeout)
+        returncode = process.wait(timeout=remaining)
+    except BaseException:
+        stop_process(process)
+        raise
+    finally:
+        selector.close()
+        process.stdout.close()
+        process.stderr.close()
+    stdout = streams[process.stdout].decode("utf-8", errors="replace")
+    stderr = streams[process.stderr].decode("utf-8", errors="replace")
+    return subprocess.CompletedProcess(command, returncode, stdout, stderr)
 
 
 def bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -312,6 +393,8 @@ def normalize_config(raw: dict[str, Any]) -> dict[str, Any]:
     raw_categories = raw.get("categories", [])
     if not isinstance(raw_categories, list):
         raise TypeError("categories must be a JSON array")
+    if len(raw_categories) > MAX_CATEGORIES:
+        raise ValueError(f"categories are limited to {MAX_CATEGORIES} entries")
     categories: list[dict[str, str]] = []
     category_ids: set[str] = set()
     for index, raw_category in enumerate(raw_categories):
@@ -327,6 +410,8 @@ def normalize_config(raw: dict[str, Any]) -> dict[str, Any]:
     raw_services = raw.get("services", [])
     if not isinstance(raw_services, list):
         raise TypeError("services must be a JSON array")
+    if len(raw_services) > MAX_SERVICES:
+        raise ValueError(f"services are limited to {MAX_SERVICES} entries")
     services: list[dict[str, Any]] = []
     service_ids: set[str] = set()
     for index, raw_service in enumerate(raw_services):
@@ -440,17 +525,16 @@ def check_tcp(probe: dict[str, Any], timeout: int) -> dict[str, Any]:
 def check_ping(probe: dict[str, Any], timeout: int) -> dict[str, Any]:
     started = time.monotonic()
     try:
-        completed = subprocess.run(
+        completed = run_bounded(
             ["ping", "-n", "-c", "1", "-W", str(max(1, math.ceil(timeout))), probe["host"]],
-            capture_output=True,
-            text=True,
             timeout=timeout + 1,
-            check=False,
         )
     except FileNotFoundError:
         return timed_result(started, False, "ping is not installed")
     except subprocess.TimeoutExpired:
         return timed_result(started, False, "Ping timed out")
+    except CommandOutputLimitExceeded:
+        return timed_result(started, False, "Ping output exceeded 256 KiB limit")
     if completed.returncode == 0:
         latency_match = re.search(r"time[=<]([0-9.]+)\s*ms", completed.stdout)
         latency = round(float(latency_match.group(1))) if latency_match else None
@@ -469,13 +553,13 @@ def check_systemd(probe: dict[str, Any], timeout: int) -> dict[str, Any]:
         command.append("--user")
     command.extend(["is-active", probe["unit"]])
     try:
-        completed = subprocess.run(
-            command, capture_output=True, text=True, timeout=timeout, check=False
-        )
+        completed = run_bounded(command, timeout=timeout)
     except FileNotFoundError:
         return timed_result(started, False, "systemctl is not installed")
     except subprocess.TimeoutExpired:
         return timed_result(started, False, "systemd check timed out")
+    except CommandOutputLimitExceeded:
+        return timed_result(started, False, "systemctl output exceeded 256 KiB limit")
     state = completed.stdout.strip() or completed.stderr.strip() or "unknown"
     return timed_result(started, completed.returncode == 0 and state == "active", state)
 
@@ -488,17 +572,16 @@ def command_detail(completed: subprocess.CompletedProcess[str], fallback: str) -
 def check_docker(probe: dict[str, Any], timeout: int) -> dict[str, Any]:
     started = time.monotonic()
     try:
-        completed = subprocess.run(
+        completed = run_bounded(
             ["docker", "inspect", "--format", "{{json .State}}", probe["container"]],
-            capture_output=True,
-            text=True,
             timeout=timeout,
-            check=False,
         )
     except FileNotFoundError:
         return timed_result(started, False, "docker is not installed")
     except subprocess.TimeoutExpired:
         return timed_result(started, False, "Docker check timed out")
+    except CommandOutputLimitExceeded:
+        return timed_result(started, False, "Docker output exceeded 256 KiB limit")
     if completed.returncode != 0:
         return timed_result(started, False, command_detail(completed, "Container not found"))
     try:
@@ -599,7 +682,7 @@ def check_kubernetes(probe: dict[str, Any], timeout: int) -> dict[str, Any]:
     started = time.monotonic()
     resource = f"{probe['resourceKind']}/{probe['name']}"
     try:
-        completed = subprocess.run(
+        completed = run_bounded(
             [
                 "kubectl",
                 "get",
@@ -609,15 +692,14 @@ def check_kubernetes(probe: dict[str, Any], timeout: int) -> dict[str, Any]:
                 "--output=json",
                 f"--request-timeout={timeout}s",
             ],
-            capture_output=True,
-            text=True,
             timeout=timeout + 1,
-            check=False,
         )
     except FileNotFoundError:
         return timed_result(started, False, "kubectl is not installed")
     except subprocess.TimeoutExpired:
         return timed_result(started, False, "Kubernetes check timed out")
+    except CommandOutputLimitExceeded:
+        return timed_result(started, False, "kubectl output exceeded 256 KiB limit")
     if completed.returncode != 0:
         return timed_result(started, False, command_detail(completed, "Kubernetes resource not found"))
     try:
