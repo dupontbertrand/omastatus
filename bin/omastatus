@@ -14,6 +14,7 @@ import re
 import selectors
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -120,12 +121,26 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def read_json(path: Path) -> dict[str, Any]:
     try:
-        with path.open("rb") as handle:
-            raw = handle.read(MAX_JSON_BYTES + 1)
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
     except FileNotFoundError:
         raise
     except OSError as error:
         raise ValueError(f"Cannot read {path}: {error}") from error
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"Cannot read {path}: not a regular file")
+        if metadata.st_uid != os.getuid():
+            raise ValueError(f"Cannot read {path}: not owned by the current user")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            raw = handle.read(MAX_JSON_BYTES + 1)
+    except OSError as error:
+        raise ValueError(f"Cannot read {path}: {error}") from error
+    finally:
+        os.close(descriptor)
     if len(raw) > MAX_JSON_BYTES:
         raise ValueError(f"{path} is limited to {MAX_JSON_BYTES} bytes")
     try:

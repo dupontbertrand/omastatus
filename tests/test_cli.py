@@ -3,12 +3,14 @@
 import http.server
 import json
 import os
+import runpy
 import socket
 import subprocess
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "bin/omastatus"
@@ -35,13 +37,14 @@ class OmastatusCliTest(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def run_cli(self, *arguments, expected=0):
+    def run_cli(self, *arguments, expected=0, timeout=None):
         completed = subprocess.run(
             [str(CLI), *arguments],
             env=self.env,
             text=True,
             capture_output=True,
             check=False,
+            timeout=timeout,
         )
         self.assertEqual(
             completed.returncode,
@@ -219,6 +222,33 @@ class OmastatusCliTest(unittest.TestCase):
         config_file.write_bytes(b" " * (1024 * 1024 + 1))
         result = self.run_cli("config", expected=2)
         self.assertIn("is limited to 1048576 bytes", result.stderr)
+
+    def test_configuration_fifo_is_rejected_without_blocking(self):
+        config_dir = Path(self.env["OMASTATUS_CONFIG_DIR"])
+        config_dir.mkdir()
+        os.mkfifo(config_dir / "config.json")
+        result = self.run_cli("config", expected=2, timeout=2)
+        self.assertIn("not a regular file", result.stderr)
+
+    def test_configuration_symlink_is_not_followed(self):
+        config_dir = Path(self.env["OMASTATUS_CONFIG_DIR"])
+        config_dir.mkdir()
+        target = self.root / "redirected.json"
+        target.write_text(
+            json.dumps({"categories": [], "services": []}),
+            encoding="utf-8",
+        )
+        (config_dir / "config.json").symlink_to(target)
+        result = self.run_cli("config", expected=2)
+        self.assertIn("Cannot read", result.stderr)
+
+    def test_json_file_must_be_owned_by_current_user(self):
+        path = self.root / "config.json"
+        path.write_text("{}", encoding="utf-8")
+        module = runpy.run_path(str(CLI))
+        with mock.patch.object(module["os"], "getuid", return_value=os.getuid() + 1):
+            with self.assertRaisesRegex(ValueError, "not owned by the current user"):
+                module["read_json"](path)
 
     def test_configuration_collection_counts_are_limited(self):
         self.json_cli("init")
